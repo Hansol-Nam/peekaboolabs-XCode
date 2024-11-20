@@ -7,7 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		CC4247032CECC27A00975C20 /* ViT_EmotionDetection_Converted.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = CC4247022CECC27A00975C20 /* ViT_EmotionDetection_Converted.mlpackage */; };
 		CC42470C2CECC73200975C20 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CC42470B2CECC73200975C20 /* AVFoundation.framework */; };
 		CC42470E2CECC73C00975C20 /* CoreML.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CC42470D2CECC73B00975C20 /* CoreML.framework */; };
 		CC4247102CECC74300975C20 /* Vision.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CC42470F2CECC74300975C20 /* Vision.framework */; };
@@ -34,7 +33,6 @@
 		CC4246D52CECC26300975C20 /* EmotionRecognitionApp2.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = EmotionRecognitionApp2.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		CC4246E52CECC26400975C20 /* EmotionRecognitionApp2Tests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = EmotionRecognitionApp2Tests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CC4246EF2CECC26400975C20 /* EmotionRecognitionApp2UITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = EmotionRecognitionApp2UITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		CC4247022CECC27A00975C20 /* ViT_EmotionDetection_Converted.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = ViT_EmotionDetection_Converted.mlpackage; sourceTree = "<group>"; };
 		CC42470B2CECC73200975C20 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
 		CC42470D2CECC73B00975C20 /* CoreML.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreML.framework; path = System/Library/Frameworks/CoreML.framework; sourceTree = SDKROOT; };
 		CC42470F2CECC74300975C20 /* Vision.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Vision.framework; path = System/Library/Frameworks/Vision.framework; sourceTree = SDKROOT; };
@@ -89,7 +87,6 @@
 		CC4246CC2CECC26300975C20 = {
 			isa = PBXGroup;
 			children = (
-				CC4247022CECC27A00975C20 /* ViT_EmotionDetection_Converted.mlpackage */,
 				CC4246D72CECC26300975C20 /* EmotionRecognitionApp2 */,
 				CC4246E82CECC26400975C20 /* EmotionRecognitionApp2Tests */,
 				CC4246F22CECC26400975C20 /* EmotionRecognitionApp2UITests */,
@@ -262,7 +259,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				CC4247032CECC27A00975C20 /* ViT_EmotionDetection_Converted.mlpackage in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -427,6 +423,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "실시간 감정 인식을 위해 카메라를 사용합니다.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "사진첩에 디버깅 이미지를 저장하기 위해 사진첩 접근 권한이 필요합니다.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -458,6 +455,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "실시간 감정 인식을 위해 카메라를 사용합니다.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "사진첩에 디버깅 이미지를 저장하기 위해 사진첩 접근 권한이 필요합니다.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
