@@ -8,22 +8,33 @@ import UIKit
 import os.log // 로그 기록을 위한 import
 import Foundation
 
+extension Array where Element: Comparable {
+    func argmax() -> Int? {
+        guard let maxValue = self.max() else { return nil }
+        return self.firstIndex(of: maxValue)
+    }
+}
+
+
 class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     @Published var emotion: String = "알 수 없음"
     
     public let session = AVCaptureSession()
     private let sessionQueue = DispatchQueue(label: "camera.session.queue")
     
-    private let emotionModel: ViT_EmotionDetection_Converted
+    private let emotionModel: coreml_model_test
     private let context = CIContext() // CIContext를 클래스 수준에서 생성해 매번 재사용
     
     private let visionQueue = DispatchQueue(label: "vision.queue")
+    
+    // 디버그 모드 플래그
+    private let debugMode = false
     
     override init() {
         do {
             let config = MLModelConfiguration()
             config.computeUnits = .all // Metal 관련 문제를 우회하기 위해 CPU 전용 사용
-            self.emotionModel = try ViT_EmotionDetection_Converted(configuration: config)
+            self.emotionModel = try coreml_model_test(configuration: config)
         } catch {
             fatalError("모델을 로드할 수 없습니다: \(error)")
         }
@@ -206,6 +217,13 @@ class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSampl
 
 
     private func saveCIImageToPhotoLibrary(_ ciImage: CIImage, forFace faceNumber: Int) {
+        
+        guard debugMode else {
+                print("Debug mode is off. Skipping image saving.")
+                return
+            }
+        
+        
         guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
             print("Failed to create CGImage from CIImage.")
             return
@@ -273,7 +291,40 @@ class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSampl
     }
 
 
+    func createMLMultiArray(from pixelBuffer: CVPixelBuffer) -> MLMultiArray? {
+        let shape: [NSNumber] = [1, 3, 224, 224] // 1(batch) x 3(channels) x 224(height) x 224(width)
+        guard let mlMultiArray = try? MLMultiArray(shape: shape, dataType: .float32) else {
+            print("Failed to create MLMultiArray.")
+            return nil
+        }
 
+        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+
+        guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else {
+            print("Pixel buffer base address is nil.")
+            return nil
+        }
+
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
+        let channels = 3
+
+        let pointer = baseAddress.assumingMemoryBound(to: UInt8.self)
+        var index = 0
+        for c in 0..<channels {
+            for h in 0..<height {
+                for w in 0..<width {
+                    let pixelIndex = h * bytesPerRow + w * channels + c
+                    mlMultiArray[index] = NSNumber(value: Float(pointer[pixelIndex]) / 255.0) // Normalize [0, 1]
+                    index += 1
+                }
+            }
+        }
+        return mlMultiArray
+    }
+    
     private func performEmotionPrediction(with pixelBuffer: CVPixelBuffer, forFace faceNumber: Int) {
         // 추론 시작 시각 기록
         //let startTime = CFAbsoluteTimeGetCurrent()
@@ -281,31 +332,54 @@ class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSampl
         // 메모리 사용량 측정 (시작 전)
         //let memoryUsageStart = reportMemory()
         
+        // PixelBuffer 정보 확인 로그
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        let pixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer)
+        
+        print("PixelBuffer Information:")
+        print("- Width: \(width)")
+        print("- Height: \(height)")
+        print("- Pixel Format: \(pixelFormat == kCVPixelFormatType_32BGRA ? "32BGRA" : "Unknown")")
+
+        // 픽셀 버퍼의 내용 일부를 출력하여 확인 (중간 값 일부를 체크)
+        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+        if let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) {
+            let buffer = baseAddress.assumingMemoryBound(to: UInt8.self)
+            let samplePixel = (width * height) / 2 // 중간 픽셀의 위치
+            print("Sample Pixel Values (RGBA): R: \(buffer[samplePixel * 4]), G: \(buffer[samplePixel * 4 + 1]), B: \(buffer[samplePixel * 4 + 2]), A: \(buffer[samplePixel * 4 + 3])")
+        }
+        CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly)
+        
+        guard let mlMultiArray = createMLMultiArray(from: pixelBuffer) else {
+                print("Failed to create MLMultiArray from pixel buffer.")
+                return
+            }
+        
         do {
-            let input = ViT_EmotionDetection_ConvertedInput(x_1: pixelBuffer)
+            let input = coreml_model_testInput(x_1: mlMultiArray)
             let output = try emotionModel.prediction(input: input)
-            let scores = output.linear_72
+            let scoresArray = output.linear_72ShapedArray.scalars // [Float] 배열로 변환
 
             //let emotionsList = ["분노", "혐오", "공포", "행복", "슬픔", "놀람", "중립"]
             let emotionsList = ["sad", "disgust", "angry", "neutral", "fear", "surprise", "happy"]
 
             print("Emotion Scores for Face \(faceNumber):")
+            
             for (index, emotion) in emotionsList.enumerated() {
-                let score = scores[index].floatValue
-                print("- \(emotion): \(score)")
+                print("- \(emotion): \(scoresArray[index])")
             }
 
-            let maxIndex = findArgmax(scores)
-
-            if maxIndex < emotionsList.count && maxIndex >= 0 {
-                DispatchQueue.main.async {
-                    self.emotion = emotionsList[maxIndex]
-                    print("Face \(faceNumber): Detected emotion: \(emotionsList[maxIndex]) with index \(maxIndex) and score \(scores[maxIndex])")
-                }
+            // 최고 점수의 감정 확인
+            if let maxIndex = scoresArray.argmax() {
+                print("Detected Emotion: \(emotionsList[maxIndex])")
+                    DispatchQueue.main.async {
+                        self.emotion = emotionsList[maxIndex]
+                    }
             } else {
                 DispatchQueue.main.async {
                     self.emotion = "알 수 없음"
-                    print("Face \(faceNumber): Invalid emotion index: \(maxIndex)")
+                    print("Face \(faceNumber): Invalid emotion index.")
                 }
             }
             
@@ -328,6 +402,8 @@ class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSampl
             }
         }
     }
+    
+    
     // 메모리 사용량을 반환하는 함수
     private func reportMemory() -> UInt64 {
         var info = task_vm_info_data_t()
