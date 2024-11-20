@@ -130,6 +130,7 @@ class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSampl
         }
 
         for (index, face) in results.enumerated() {
+            let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
             let boundingBox = face.boundingBox
 
             let imageWidth = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
@@ -140,37 +141,67 @@ class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSampl
             let adjustedWidth = boundingBox.size.width * imageWidth
             let adjustedHeight = boundingBox.size.height * imageHeight
 
-            let faceRect = CGRect(x: adjustedX, y: adjustedY, width: adjustedWidth, height: adjustedHeight)
+            var faceRect = CGRect(x: adjustedX, y: adjustedY, width: adjustedWidth, height: adjustedHeight)
+
+            // faceRect가 이미지의 extent를 벗어나지 않도록 보정
+            faceRect = faceRect.intersection(ciImage.extent)
+
+            if faceRect.isEmpty {
+                print("Face bounding box does not intersect with the image extent.")
+                continue
+            }
+            if faceRect.width <= 0 || faceRect.height <= 0 {
+                print("Invalid faceRect dimensions: width = \(faceRect.width), height = \(faceRect.height)")
+                continue
+            }
+
             print("Final Bounding Box after adjustment: \(faceRect)")
 
-            let croppedCIImage = CIImage(cvPixelBuffer: pixelBuffer).cropped(to: faceRect)
+            var croppedCIImage = ciImage.cropped(to: faceRect)
+
+            if croppedCIImage.extent.width <= 0 || croppedCIImage.extent.height <= 0 {
+                print("Invalid cropped CIImage extent: \(croppedCIImage.extent)")
+                continue
+            }
+            
+            // 잘라낸 이미지의 원점을 (0, 0)으로 이동하여 크기 보정
+            croppedCIImage = croppedCIImage.transformed(by: CGAffineTransform(translationX: -croppedCIImage.extent.origin.x,
+                                                                              y: -croppedCIImage.extent.origin.y))
+            print("Corrected Cropped CIImage extent: \(croppedCIImage.extent)")
 
             // 흑백 필터 적용
             let grayscaleFilter = CIFilter.colorControls()
             grayscaleFilter.inputImage = croppedCIImage
             grayscaleFilter.saturation = 0.0 // 채도를 0으로 설정하여 흑백 변환
             grayscaleFilter.contrast = 1.1 // 대비를 조절하여 좀 더 명확하게 만듦
-            
+
             guard let grayscaleImage = grayscaleFilter.outputImage else {
                 print("Failed to apply grayscale filter to image.")
-                return
+                continue
             }
 
             // 이미지 방향 수정
             let rotatedImage = grayscaleImage.transformed(by: CGAffineTransform(rotationAngle: -.pi / 2))
 
-            // 회전된 이미지 저장
+            // 회전된 이미지의 크기가 유효한지 검증
+            if rotatedImage.extent.width <= 0 || rotatedImage.extent.height <= 0 || rotatedImage.extent.origin.x.isInfinite || rotatedImage.extent.origin.y.isInfinite {
+                print("Rotated image extent is invalid.")
+                continue
+            }
+
             saveCIImageToPhotoLibrary(rotatedImage, forFace: index + 1)
-            
+
             // 모델에 사용될 크기의 PixelBuffer로 변환
             guard let resizedPixelBuffer = resizeImageToPixelBuffer(ciImage: rotatedImage, targetSize: CGSize(width: 224, height: 224)) else {
                 print("Failed to resize face image.")
-                return
+                continue
             }
 
             performEmotionPrediction(with: resizedPixelBuffer, forFace: index + 1)
         }
     }
+
+
 
     private func saveCIImageToPhotoLibrary(_ ciImage: CIImage, forFace faceNumber: Int) {
         guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
@@ -204,11 +235,43 @@ class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSampl
             return nil
         }
 
+        // CIImage를 원점(0,0)에서 시작하도록 보정하여 음수 좌표 제거
+        let normalizedExtent = CGRect(x: 0, y: 0, width: ciImage.extent.width, height: ciImage.extent.height)
+        
+        // CGRect가 유효한지 확인하고 잘못된 값이 있는지 검사합니다.
+        if normalizedExtent.width <= 0 || normalizedExtent.height <= 0 || normalizedExtent.origin.x.isInfinite || normalizedExtent.origin.y.isInfinite {
+            print("Invalid normalized extent: \(normalizedExtent)")
+            return nil
+        }
+        
+        let normalizedImage = ciImage.cropped(to: normalizedExtent)
+
+        print("Normalized CIImage extent: \(normalizedImage.extent)")
+        print("Target size for resizing: \(targetSize)")
+
+        // CIContext 렌더링을 위한 보정
         let ciContext = CIContext()
-        ciContext.render(ciImage, to: buffer)
+        
+        let scaleX = targetSize.width / normalizedImage.extent.width
+        let scaleY = targetSize.height / normalizedImage.extent.height
+
+        // 스케일 값이 유효한지 확인합니다.
+        if scaleX.isInfinite || scaleY.isInfinite || scaleX <= 0 || scaleY <= 0 {
+            print("Invalid scale values: scaleX = \(scaleX), scaleY = \(scaleY)")
+            return nil
+        }
+        
+        let scaledImage = normalizedImage.transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
+
+        
+        print("Scaled CIImage extent: \(scaledImage.extent)")
+
+        // 렌더링 대상과 이미지 크기 일치
+        ciContext.render(scaledImage, to: buffer, bounds: CGRect(origin: .zero, size: targetSize), colorSpace: CGColorSpaceCreateDeviceRGB())
 
         return buffer
     }
+
 
     private func performEmotionPrediction(with pixelBuffer: CVPixelBuffer, forFace faceNumber: Int) {
         do {
