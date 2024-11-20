@@ -5,6 +5,8 @@ import CoreML
 import CoreImage
 import CoreImage.CIFilterBuiltins
 import UIKit
+import os.log // 로그 기록을 위한 import
+import Foundation
 
 class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     @Published var emotion: String = "알 수 없음"
@@ -20,7 +22,7 @@ class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSampl
     override init() {
         do {
             let config = MLModelConfiguration()
-            config.computeUnits = .cpuOnly // Metal 관련 문제를 우회하기 위해 CPU 전용 사용
+            config.computeUnits = .all // Metal 관련 문제를 우회하기 위해 CPU 전용 사용
             self.emotionModel = try ViT_EmotionDetection_Converted(configuration: config)
         } catch {
             fatalError("모델을 로드할 수 없습니다: \(error)")
@@ -273,13 +275,20 @@ class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSampl
 
 
     private func performEmotionPrediction(with pixelBuffer: CVPixelBuffer, forFace faceNumber: Int) {
+        // 추론 시작 시각 기록
+        //let startTime = CFAbsoluteTimeGetCurrent()
+
+        // 메모리 사용량 측정 (시작 전)
+        //let memoryUsageStart = reportMemory()
+        
         do {
             let input = ViT_EmotionDetection_ConvertedInput(x_1: pixelBuffer)
             let output = try emotionModel.prediction(input: input)
             let scores = output.linear_72
 
-            let emotionsList = ["분노", "혐오", "공포", "행복", "슬픔", "놀람", "중립"]
-            
+            //let emotionsList = ["분노", "혐오", "공포", "행복", "슬픔", "놀람", "중립"]
+            let emotionsList = ["sad", "disgust", "angry", "neutral", "fear", "surprise", "happy"]
+
             print("Emotion Scores for Face \(faceNumber):")
             for (index, emotion) in emotionsList.enumerated() {
                 let score = scores[index].floatValue
@@ -299,6 +308,19 @@ class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSampl
                     print("Face \(faceNumber): Invalid emotion index: \(maxIndex)")
                 }
             }
+            
+            
+            // 추론 종료 시각 기록
+            //let endTime = CFAbsoluteTimeGetCurrent()
+            //let elapsedTime = endTime - startTime
+            //print("Inference Time for Face \(faceNumber): \(elapsedTime) seconds")
+
+            // 메모리 사용량 측정 (추론 후)
+            //let memoryUsageEnd = reportMemory()
+            //let memoryUsageDifference = memoryUsageEnd - memoryUsageStart
+            //print("Memory Usage Difference for Face \(faceNumber): \(memoryUsageDifference / 1024) KB")
+            
+            
         } catch {
             print("모델 예측 오류: \(error)")
             DispatchQueue.main.async {
@@ -306,7 +328,23 @@ class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSampl
             }
         }
     }
+    // 메모리 사용량을 반환하는 함수
+    private func reportMemory() -> UInt64 {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size) / 4
 
+        let result: kern_return_t = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+
+        if result == KERN_SUCCESS {
+            return info.phys_footprint
+        } else {
+            return 0 // 메모리 사용량을 가져오지 못한 경우
+        }
+    }
     private func findArgmax(_ multiArray: MLMultiArray) -> Int {
         var maxValue: Float = -Float.greatestFiniteMagnitude
         var maxIndex: Int = -1
