@@ -236,22 +236,20 @@ class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSampl
         }
 
         // CIImage를 원점(0,0)에서 시작하도록 보정하여 음수 좌표 제거
-        let normalizedExtent = CGRect(x: 0, y: 0, width: ciImage.extent.width, height: ciImage.extent.height)
-        
-        // CGRect가 유효한지 확인하고 잘못된 값이 있는지 검사합니다.
-        if normalizedExtent.width <= 0 || normalizedExtent.height <= 0 || normalizedExtent.origin.x.isInfinite || normalizedExtent.origin.y.isInfinite {
-            print("Invalid normalized extent: \(normalizedExtent)")
-            return nil
+        var normalizedImage = ciImage
+        if normalizedImage.extent.origin.x != 0 || normalizedImage.extent.origin.y != 0 {
+            let translationTransform = CGAffineTransform(translationX: -normalizedImage.extent.origin.x,
+                                                         y: -normalizedImage.extent.origin.y)
+            normalizedImage = normalizedImage.transformed(by: translationTransform)
         }
-        
-        let normalizedImage = ciImage.cropped(to: normalizedExtent)
 
         print("Normalized CIImage extent: \(normalizedImage.extent)")
         print("Target size for resizing: \(targetSize)")
 
         // CIContext 렌더링을 위한 보정
         let ciContext = CIContext()
-        
+
+        // 이미지를 targetSize로 스케일링
         let scaleX = targetSize.width / normalizedImage.extent.width
         let scaleY = targetSize.height / normalizedImage.extent.height
 
@@ -260,17 +258,18 @@ class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSampl
             print("Invalid scale values: scaleX = \(scaleX), scaleY = \(scaleY)")
             return nil
         }
-        
+
         let scaledImage = normalizedImage.transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
 
-        
         print("Scaled CIImage extent: \(scaledImage.extent)")
 
         // 렌더링 대상과 이미지 크기 일치
-        ciContext.render(scaledImage, to: buffer, bounds: CGRect(origin: .zero, size: targetSize), colorSpace: CGColorSpaceCreateDeviceRGB())
+        let targetRect = CGRect(origin: .zero, size: targetSize)
+        ciContext.render(scaledImage, to: buffer, bounds: targetRect, colorSpace: CGColorSpaceCreateDeviceRGB())
 
         return buffer
     }
+
 
 
     private func performEmotionPrediction(with pixelBuffer: CVPixelBuffer, forFace faceNumber: Int) {
