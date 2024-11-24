@@ -22,19 +22,20 @@ class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSampl
     public let session = AVCaptureSession()
     private let sessionQueue = DispatchQueue(label: "camera.session.queue")
     
-    private let emotionModel: coreml_model_test
+    private let emotionModel: coreml_model_test_float16
     private let context = CIContext() // CIContext를 클래스 수준에서 생성해 매번 재사용
     
     private let visionQueue = DispatchQueue(label: "vision.queue")
     
     // 디버그 모드 플래그
     private let debugMode = false
-    
+    private var frameCount = 0 // 프레임 카운터
+
     override init() {
         do {
             let config = MLModelConfiguration()
-            config.computeUnits = .all // Metal 관련 문제를 우회하기 위해 CPU 전용 사용
-            self.emotionModel = try coreml_model_test(configuration: config)
+            config.computeUnits = .cpuAndNeuralEngine // GPU & Neural Engine을 최대한 활용
+            self.emotionModel = try coreml_model_test_float16(configuration: config)
         } catch {
             fatalError("모델을 로드할 수 없습니다: \(error)")
         }
@@ -62,8 +63,8 @@ class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSampl
     func configureSession() {
         sessionQueue.async {
             self.session.beginConfiguration()
-            self.session.sessionPreset = .high
-            
+            self.session.sessionPreset = .high // 처리량 감소를 위해 해상도 낮춤
+
             guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
                 print("후면 카메라를 찾을 수 없습니다.")
                 return
@@ -98,6 +99,13 @@ class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSampl
             print("Failed to get pixel buffer from sample buffer.")
             return
         }
+        
+        // 프레임 드롭: 초당 30fps 기준으로 5fps로 줄이기
+        frameCount += 1
+        if frameCount % 6 != 0 { // 홀수 프레임은 건너뜀
+            return
+        }
+        
         detectEmotion(on: pixelBuffer)
     }
 
@@ -326,79 +334,85 @@ class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSampl
     }
     
     private func performEmotionPrediction(with pixelBuffer: CVPixelBuffer, forFace faceNumber: Int) {
-        // 추론 시작 시각 기록
-        //let startTime = CFAbsoluteTimeGetCurrent()
+        // Core ML 모델 실행을 별도의 글로벌 큐에서 수행
+        DispatchQueue.global(qos: .userInitiated).async {[weak self] in
+            guard let self = self else { return }
+            // 추론 시작 시각 기록
+            //let startTime = CFAbsoluteTimeGetCurrent()
 
-        // 메모리 사용량 측정 (시작 전)
-        //let memoryUsageStart = reportMemory()
-        
-        // PixelBuffer 정보 확인 로그
-        let width = CVPixelBufferGetWidth(pixelBuffer)
-        let height = CVPixelBufferGetHeight(pixelBuffer)
-        let pixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer)
-        
-        print("PixelBuffer Information:")
-        print("- Width: \(width)")
-        print("- Height: \(height)")
-        print("- Pixel Format: \(pixelFormat == kCVPixelFormatType_32BGRA ? "32BGRA" : "Unknown")")
-
-        // 픽셀 버퍼의 내용 일부를 출력하여 확인 (중간 값 일부를 체크)
-        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
-        if let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) {
-            let buffer = baseAddress.assumingMemoryBound(to: UInt8.self)
-            let samplePixel = (width * height) / 2 // 중간 픽셀의 위치
-            print("Sample Pixel Values (RGBA): R: \(buffer[samplePixel * 4]), G: \(buffer[samplePixel * 4 + 1]), B: \(buffer[samplePixel * 4 + 2]), A: \(buffer[samplePixel * 4 + 3])")
-        }
-        CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly)
-        
-        guard let mlMultiArray = createMLMultiArray(from: pixelBuffer) else {
-                print("Failed to create MLMultiArray from pixel buffer.")
-                return
-            }
-        
-        do {
-            let input = coreml_model_testInput(x_1: mlMultiArray)
-            let output = try emotionModel.prediction(input: input)
-            let scoresArray = output.linear_72ShapedArray.scalars // [Float] 배열로 변환
-
-            //let emotionsList = ["분노", "혐오", "공포", "행복", "슬픔", "놀람", "중립"]
-            let emotionsList = ["sad", "disgust", "angry", "neutral", "fear", "surprise", "happy"]
-
-            print("Emotion Scores for Face \(faceNumber):")
+            // 메모리 사용량 측정 (시작 전)
+            //let memoryUsageStart = reportMemory()
             
-            for (index, emotion) in emotionsList.enumerated() {
-                print("- \(emotion): \(scoresArray[index])")
-            }
+            // PixelBuffer 정보 확인 로그
+            let width = CVPixelBufferGetWidth(pixelBuffer)
+            let height = CVPixelBufferGetHeight(pixelBuffer)
+            let pixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer)
+            
+            print("PixelBuffer Information:")
+            print("- Width: \(width)")
+            print("- Height: \(height)")
+            print("- Pixel Format: \(pixelFormat == kCVPixelFormatType_32BGRA ? "32BGRA" : "Unknown")")
 
-            // 최고 점수의 감정 확인
-            if let maxIndex = scoresArray.argmax() {
-                print("Detected Emotion: \(emotionsList[maxIndex])")
-                    DispatchQueue.main.async {
-                        self.emotion = emotionsList[maxIndex]
-                    }
-            } else {
-                DispatchQueue.main.async {
-                    self.emotion = "알 수 없음"
-                    print("Face \(faceNumber): Invalid emotion index.")
+            // 픽셀 버퍼의 내용 일부를 출력하여 확인 (중간 값 일부를 체크)
+            CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+            if let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) {
+                let buffer = baseAddress.assumingMemoryBound(to: UInt8.self)
+                let samplePixel = (width * height) / 2 // 중간 픽셀의 위치
+                print("Sample Pixel Values (RGBA): R: \(buffer[samplePixel * 4]), G: \(buffer[samplePixel * 4 + 1]), B: \(buffer[samplePixel * 4 + 2]), A: \(buffer[samplePixel * 4 + 3])")
+            }
+            CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly)
+            
+            guard let mlMultiArray = self.createMLMultiArray(from: pixelBuffer) else {
+                    print("Failed to create MLMultiArray from pixel buffer.")
+                    return
                 }
-            }
             
-            
-            // 추론 종료 시각 기록
-            //let endTime = CFAbsoluteTimeGetCurrent()
-            //let elapsedTime = endTime - startTime
-            //print("Inference Time for Face \(faceNumber): \(elapsedTime) seconds")
+            do {
+                let input = coreml_model_test_float16Input(x_1: mlMultiArray)
+                let output = try self.emotionModel.prediction(input: input)
+                let scoresArray = output.linear_72ShapedArray.scalars // [Float] 배열로 변환
 
-            // 메모리 사용량 측정 (추론 후)
-            //let memoryUsageEnd = reportMemory()
-            //let memoryUsageDifference = memoryUsageEnd - memoryUsageStart
-            //print("Memory Usage Difference for Face \(faceNumber): \(memoryUsageDifference / 1024) KB")
-            
-            
-        } catch {
-            print("모델 예측 오류: \(error)")
-            DispatchQueue.main.async {
-                self.emotion = "오류 발생"
+                //let emotionsList = ["분노", "혐오", "공포", "행복", "슬픔", "놀람", "중립"]
+                let emotionsList = ["sad", "disgust", "angry", "neutral", "fear", "surprise", "happy"]
+
+                print("Emotion Scores for Face \(faceNumber):")
+                
+                for (index, emotion) in emotionsList.enumerated() {
+                    print("- \(emotion): \(scoresArray[index])")
+                }
+
+                // 최고 점수의 감정 확인
+                if let maxIndex = scoresArray.argmax() {
+                    print("Detected Emotion: \(emotionsList[maxIndex])")
+                    if self.emotion != emotionsList[maxIndex] {
+                        DispatchQueue.main.async {
+                            self.emotion = emotionsList[maxIndex]
+                        }
+                    }
+                } else {
+                    DispatchQueue.main.async {
+                        self.emotion = "알 수 없음"
+                        print("Face \(faceNumber): Invalid emotion index.")
+                    }
+                }
+                
+                
+                // 추론 종료 시각 기록
+                //let endTime = CFAbsoluteTimeGetCurrent()
+                //let elapsedTime = endTime - startTime
+                //print("Inference Time for Face \(faceNumber): \(elapsedTime) seconds")
+
+                // 메모리 사용량 측정 (추론 후)
+                //let memoryUsageEnd = reportMemory()
+                //let memoryUsageDifference = memoryUsageEnd - memoryUsageStart
+                //print("Memory Usage Difference for Face \(faceNumber): \(memoryUsageDifference / 1024) KB")
+                
+                
+            } catch {
+                print("모델 예측 오류: \(error)")
+                DispatchQueue.main.async {
+                    self.emotion = "오류 발생"
+                }
             }
         }
     }
